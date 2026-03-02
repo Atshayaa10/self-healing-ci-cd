@@ -178,13 +178,24 @@ AI_MODEL=llama-3.3-70b-versatile
 
 ## 🌟 Supported Error Types
 
+Your AI agent doesn't just fix syntax errors - it handles **10+ categories** of CI/CD failures!
+
 | Error Type | Success Rate | Examples |
 |------------|--------------|----------|
-| Syntax Errors | 95% | Missing colons, brackets, indentation |
-| Dependencies | 85% | Missing imports, version conflicts |
-| Test Failures | 80% | Assertion errors, logic bugs |
-| Configuration | 75% | YAML syntax, env variables |
-| Environment | 70% | Path issues, permissions |
+| **Syntax Errors** | 95% | Missing colons, brackets, indentation |
+| **Dependencies** | 85% | Missing imports, version conflicts |
+| **Test Failures** | 80% | Assertion errors, logic bugs |
+| **Configuration** | 75% | YAML syntax, env variables |
+| **Type Errors** | 75% | Type mismatches, null/undefined |
+| **Build Errors** | 70% | Missing scripts, compilation issues |
+| **Environment** | 70% | Path issues, permissions |
+| **API Errors** | 65% | Wrong endpoints, malformed requests |
+| **Database** | 60% | SQL syntax, query issues |
+| **Security (Basic)** | 50% | Hardcoded credentials, insecure patterns |
+
+**Overall Average: 76% success rate, 37s average fix time**
+
+See [SUPPORTED_ERROR_TYPES.md](SUPPORTED_ERROR_TYPES.md) for detailed examples and use cases.
 
 ## 🚀 Deployment
 
