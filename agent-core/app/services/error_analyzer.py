@@ -67,6 +67,13 @@ class ErrorAnalyzer:
         """Classify error based on log patterns"""
         logs_lower = logs.lower()
         
+        # Syntax error patterns - CHECK FIRST (highest priority)
+        if any(pattern in logs_lower for pattern in [
+            'syntax error', 'syntaxerror', 'parse error', 'unexpected token',
+            'invalid syntax', 'compilation failed', 'expected \':\'', 'expected ":"'
+        ]):
+            return ErrorCategory.SYNTAX_ERROR
+        
         # Dependency patterns
         if any(pattern in logs_lower for pattern in [
             'dependency', 'version conflict', 'package not found', 
@@ -80,13 +87,6 @@ class ErrorAnalyzer:
             'test suite failed', 'spec failed'
         ]):
             return ErrorCategory.TEST_FAILURE
-        
-        # Syntax error patterns
-        if any(pattern in logs_lower for pattern in [
-            'syntax error', 'parse error', 'unexpected token',
-            'invalid syntax', 'compilation failed'
-        ]):
-            return ErrorCategory.SYNTAX_ERROR
         
         # Configuration patterns
         if any(pattern in logs_lower for pattern in [

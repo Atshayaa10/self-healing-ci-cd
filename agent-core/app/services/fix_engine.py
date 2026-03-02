@@ -122,20 +122,25 @@ class FixEngine:
     
     async def _fix_syntax_error(self, analysis: Dict[str, Any], 
                                context: Dict[str, Any]) -> Dict[str, Any]:
-        """Fix syntax errors"""
+        """Fix syntax errors - AI will analyze file after cloning repo"""
         
         changes = []
         
+        # For syntax errors, we'll use a special action that tells git_manager
+        # to fetch the file, send it to AI, and replace it with corrected version
         for file in analysis.get('affected_files', []):
-            changes.append({
-                'file': file,
-                'action': 'fix_syntax',
-                'description': 'Auto-format and fix syntax issues'
-            })
+            if file and not file.endswith(('.yml', '.yaml', '.c')):
+                changes.append({
+                    'file': file,
+                    'action': 'ai_fix_syntax',
+                    'description': 'Fetch file, analyze with AI, and replace with corrected version',
+                    'error_message': analysis.get('error_message', ''),
+                    'root_cause': analysis.get('root_cause', '')
+                })
         
         return {
             'fix_type': 'syntax_error_fix',
-            'description': 'Fixed syntax errors',
+            'description': 'AI-powered syntax error fix',
             'changes': changes,
             'auto_applicable': True
         }
@@ -190,6 +195,162 @@ class FixEngine:
             'changes': [],
             'auto_applicable': False
         }
+    
+    async def _ai_fix_syntax_with_full_file(self, analysis: Dict[str, Any], 
+                                            context: Dict[str, Any]) -> Dict[str, Any]:
+        """Use AI to fetch entire file, analyze it, and generate complete corrected code"""
+        
+        if not self.client:
+            return {}
+        
+        try:
+            # Get the affected file
+            affected_files = analysis.get('affected_files', [])
+            if not affected_files:
+                logger.warning("No affected files found in analysis")
+                return {}
+            
+            # Focus on the first affected file (usually the main issue)
+            target_file = affected_files[0]
+            logger.info(f"Fetching file content from GitHub: {target_file}")
+            
+            # Fetch file content from GitHub
+            file_content = await self._fetch_file_from_github(target_file, context)
+            if not file_content:
+                logger.error(f"Could not fetch file content for {target_file}")
+                return {}
+            
+            logger.info(f"Successfully fetched {len(file_content)} characters from {target_file}")
+            
+            # Use AI to analyze and fix the entire file
+            prompt = f"""You are a code fixing expert. A CI/CD pipeline failed due to a syntax error in this file.
+
+File: {target_file}
+Error Message: {analysis['error_message']}
+Root Cause: {analysis.get('root_cause', 'Syntax error detected')}
+
+Here is the COMPLETE file content:
+
+```
+{file_content}
+```
+
+Your task:
+1. Analyze the ENTIRE file carefully
+2. Identify ALL syntax errors (missing colons, parentheses, indentation issues, etc.)
+3. Generate the COMPLETE CORRECTED file with ALL errors fixed
+4. Return ONLY the corrected code, nothing else
+
+IMPORTANT: Return the COMPLETE corrected file content. Do not explain, do not add comments about what you changed. Just return the fixed code."""
+
+            if self.ai_provider == "groq":
+                response = self.client.chat.completions.create(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a code fixing expert. Return only the corrected code, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.1
+                )
+                corrected_code = response.choices[0].message.content.strip()
+                
+            elif self.ai_provider == "openai":
+                response = self.client.chat.completions.create(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a code fixing expert. Return only the corrected code, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.1
+                )
+                corrected_code = response.choices[0].message.content.strip()
+                
+            elif self.ai_provider == "gemini":
+                model = self.client.GenerativeModel(settings.AI_MODEL)
+                full_prompt = "You are a code fixing expert. Return only the corrected code, no explanations.\n\n" + prompt
+                response = model.generate_content(full_prompt)
+                corrected_code = response.text.strip()
+                
+            elif self.ai_provider == "ollama":
+                response = self.client.chat(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a code fixing expert. Return only the corrected code, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                corrected_code = response['message']['content'].strip()
+            else:
+                return {}
+            
+            # Clean up the response - remove markdown code blocks if present
+            if '```python' in corrected_code:
+                corrected_code = corrected_code.split('```python')[1].split('```')[0].strip()
+            elif '```' in corrected_code:
+                corrected_code = corrected_code.split('```')[1].split('```')[0].strip()
+            
+            logger.info(f"AI generated corrected code ({len(corrected_code)} characters)")
+            
+            # Return the fix with complete file content
+            return {
+                'fix_type': 'syntax_error_fix',
+                'description': f'AI-generated complete fix for {target_file}',
+                'changes': [{
+                    'file': target_file,
+                    'action': 'replace_entire_file',
+                    'description': f'Replace entire file with AI-corrected version',
+                    'code_snippet': corrected_code
+                }],
+                'auto_applicable': True
+            }
+        
+        except Exception as e:
+            logger.error(f"AI full file fix failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {}
+    
+    async def _fetch_file_from_github(self, file_path: str, context: Dict[str, Any]) -> str:
+        """Fetch file content from GitHub repository"""
+        try:
+            import requests
+            from app.core.config import settings
+            
+            # Extract repository info from context
+            repository = context.get('repository', '')
+            branch = context.get('branch', 'main')
+            
+            if not repository:
+                logger.error("No repository information in context")
+                return ""
+            
+            # GitHub API URL for file content
+            api_url = f"https://api.github.com/repos/{repository}/contents/{file_path}"
+            
+            headers = {
+                'Accept': 'application/vnd.github.v3.raw',
+                'Authorization': f'token {settings.GITHUB_TOKEN}'
+            }
+            
+            params = {'ref': branch}
+            
+            logger.info(f"Fetching from GitHub: {api_url}?ref={branch}")
+            
+            response = requests.get(api_url, headers=headers, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                return response.text
+            else:
+                logger.error(f"GitHub API error: {response.status_code} - {response.text}")
+                return ""
+        
+        except Exception as e:
+            logger.error(f"Failed to fetch file from GitHub: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return ""
     
     async def _ai_generate_fix(self, analysis: Dict[str, Any], 
                               context: Dict[str, Any]) -> Dict[str, Any]:

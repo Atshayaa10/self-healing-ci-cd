@@ -71,7 +71,21 @@ class GitManager:
                 else:
                     logger.info(f"File exists at expected path: {file_path}")
                 
-                if change['action'] == 'update_dependency':
+                if change['action'] == 'replace_entire_file':
+                    result = await self._replace_entire_file(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully replaced entire file: {file_path}")
+                    else:
+                        logger.error(f"Failed to replace file: {file_path}")
+                elif change['action'] == 'ai_fix_syntax':
+                    result = await self._ai_fix_syntax_file(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully applied AI syntax fix to {file_path}")
+                    else:
+                        logger.error(f"Failed to apply AI syntax fix to {file_path}")
+                elif change['action'] == 'update_dependency':
                     await self._update_dependency_file(file_path, change)
                     changes_applied = True
                 elif change['action'] == 'fix_syntax':
@@ -147,9 +161,15 @@ class GitManager:
                 except Exception as e:
                     logger.debug(f"Could not check {py_file}: {e}")
 
-            # If no files with syntax errors found, return the first Python file
+            # If no files with syntax errors found, return the first Python file that's not a test/workflow file
+            non_test_files = [f for f in python_files if 'test' not in f.name.lower() and 'workflow' not in str(f).lower()]
+            if non_test_files:
+                logger.info(f"No syntax errors detected, using first non-test Python file: {non_test_files[0]}")
+                return non_test_files[0]
+            
+            # Last resort: return first Python file
             if python_files:
-                logger.info(f"No syntax errors detected, using first Python file: {python_files[0]}")
+                logger.info(f"Using first Python file: {python_files[0]}")
                 return python_files[0]
 
         # Strategy 4: For YAML/YML files, find workflow files
@@ -177,6 +197,17 @@ class GitManager:
                 if any(stripped.startswith(keyword) for keyword in ['def ', 'class ', 'if ', 'elif ', 'else', 'for ', 'while ', 'try', 'except', 'finally', 'with ']):
                     if not stripped.endswith(':') and not stripped.endswith('\\'):
                         return True
+                
+                # Check for unmatched parentheses, brackets, braces
+                open_parens = stripped.count('(') - stripped.count(')')
+                open_brackets = stripped.count('[') - stripped.count(']')
+                open_braces = stripped.count('{') - stripped.count('}')
+                
+                if open_parens != 0 or open_brackets != 0 or open_braces != 0:
+                    # If line doesn't end with a continuation character, it's likely an error
+                    if not stripped.endswith(('\\', ',')):
+                        return True
+        
         return False
 
 
@@ -298,6 +329,149 @@ class GitManager:
             except Exception as e:
                 logger.error(f"Failed to cleanup: {e}")
     
+    async def _ai_fix_syntax_file(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Use AI to analyze and fix syntax errors in file"""
+        if not file_path.exists():
+            logger.warning(f"File not found: {file_path}")
+            return False
+        
+        try:
+            # Read the file content
+            content = file_path.read_text(encoding='utf-8')
+            logger.info(f"Read file {file_path} ({len(content)} characters)")
+            
+            # Get error details from change
+            error_message = change.get('error_message', 'Syntax error detected')
+            root_cause = change.get('root_cause', 'Unknown')
+            
+            # Use AI to fix the file
+            from app.core.config import settings
+            
+            # Initialize AI client
+            client = None
+            ai_provider = settings.AI_PROVIDER.lower()
+            
+            if ai_provider == "groq":
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=settings.GROQ_API_KEY)
+                except ImportError:
+                    logger.error("Groq package not installed")
+                    return False
+            elif ai_provider == "openai":
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                except ImportError:
+                    logger.error("OpenAI package not installed")
+                    return False
+            else:
+                logger.error(f"Unsupported AI provider: {ai_provider}")
+                return False
+            
+            if not client:
+                logger.error("AI client not initialized")
+                return False
+            
+            # Create prompt for AI
+            prompt = f"""You are a code fixing expert. A CI/CD pipeline failed due to a syntax error in this file.
+
+File: {file_path.name}
+Error Message: {error_message}
+Root Cause: {root_cause}
+
+Here is the COMPLETE file content:
+
+```
+{content}
+```
+
+Your task:
+1. Analyze the ENTIRE file carefully
+2. Identify ALL syntax errors (missing colons, parentheses, indentation issues, etc.)
+3. Generate the COMPLETE CORRECTED file with ALL errors fixed
+4. Return ONLY the corrected code, nothing else
+
+IMPORTANT: Return the COMPLETE corrected file content. Do not explain, do not add comments about what you changed. Just return the fixed code."""
+
+            logger.info(f"Sending file to AI for analysis ({ai_provider})...")
+            
+            # Call AI
+            if ai_provider == "groq":
+                response = client.chat.completions.create(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a code fixing expert. Return only the corrected code, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.1
+                )
+                corrected_code = response.choices[0].message.content.strip()
+            elif ai_provider == "openai":
+                response = client.chat.completions.create(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a code fixing expert. Return only the corrected code, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.1
+                )
+                corrected_code = response.choices[0].message.content.strip()
+            else:
+                return False
+            
+            # Clean up the response - remove markdown code blocks if present
+            if '```python' in corrected_code:
+                corrected_code = corrected_code.split('```python')[1].split('```')[0].strip()
+            elif '```' in corrected_code:
+                corrected_code = corrected_code.split('```')[1].split('```')[0].strip()
+            
+            logger.info(f"AI generated corrected code ({len(corrected_code)} characters)")
+            
+            # Write the corrected code
+            file_path.write_text(corrected_code, encoding='utf-8')
+            logger.info(f"Successfully replaced file with AI-corrected version")
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to AI-fix syntax in {file_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    async def _replace_entire_file(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Replace entire file content with AI-generated corrected code"""
+        try:
+            if not file_path.exists():
+                logger.error(f"File not found: {file_path}")
+                return False
+            
+            # Get the corrected code from the change
+            corrected_code = change.get('code_snippet', '')
+            if not corrected_code:
+                logger.error("No code_snippet provided in change")
+                return False
+            
+            # Read original content for logging
+            original_content = file_path.read_text(encoding='utf-8')
+            logger.info(f"Original file size: {len(original_content)} characters")
+            logger.info(f"Corrected file size: {len(corrected_code)} characters")
+            
+            # Write the corrected code
+            file_path.write_text(corrected_code, encoding='utf-8')
+            logger.info(f"Successfully replaced entire file: {file_path}")
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to replace file {file_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
     async def _update_dependency_file(self, file_path: Path, change: Dict[str, Any]):
         """Update dependency file (package.json, requirements.txt, etc.)"""
         if not file_path.exists():
@@ -357,10 +531,31 @@ class GitManager:
                     # Check if it's a complete statement
                     stripped = line.strip()
                     if stripped and not stripped.endswith(':'):
-                        # Add colon if missing
-                        indent = len(line) - len(line.lstrip())
-                        fixed_line = ' ' * indent + stripped + ':'
-                        logger.debug(f"Added missing colon to line {i+1}")
+                        # Handle comments - insert colon before comment
+                        if '#' in stripped:
+                            # Find the comment position
+                            comment_pos = stripped.find('#')
+                            code_part = stripped[:comment_pos].rstrip()
+                            comment_part = stripped[comment_pos:]
+                            
+                            # For function/class definitions, add colon after closing parenthesis
+                            if stripped.startswith(('def ', 'class ')) and ')' in code_part:
+                                # Find last closing parenthesis
+                                last_paren = code_part.rfind(')')
+                                fixed_code = code_part[:last_paren+1] + ':'
+                                indent = len(line) - len(line.lstrip())
+                                fixed_line = ' ' * indent + fixed_code + '  ' + comment_part
+                                logger.debug(f"Added missing colon after ) on line {i+1}")
+                            else:
+                                # Add colon after code, before comment
+                                indent = len(line) - len(line.lstrip())
+                                fixed_line = ' ' * indent + code_part + ':  ' + comment_part
+                                logger.debug(f"Added missing colon before comment on line {i+1}")
+                        else:
+                            # No comment, add colon at end
+                            indent = len(line) - len(line.lstrip())
+                            fixed_line = ' ' * indent + stripped + ':'
+                            logger.debug(f"Added missing colon to line {i+1}")
             
             # Fix missing closing parentheses/brackets (basic)
             open_parens = fixed_line.count('(') - fixed_line.count(')')

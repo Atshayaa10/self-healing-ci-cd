@@ -34,11 +34,32 @@ build/
 # Environment
 .env
 *.log
+logs/
 
 # Database
 *.db
+*.db-journal
 *.sqlite
+*.db.backup.*
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Test files (keep in local only)
+test_*.py
+check_*.py
+delete_*.py
+cleanup_*.py
+verify-*.ps1
+reset_*.py
+clear_*.py
+
+# Local scripts
+COMPLETE_FIX_NOW.py
