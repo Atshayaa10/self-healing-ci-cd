@@ -74,10 +74,20 @@ class ErrorAnalyzer:
         ]):
             return ErrorCategory.SYNTAX_ERROR
         
-        # Dependency patterns
+        # Dependency/Import error patterns - CHECK SECOND (before general dependency)
+        # These are NameError, ImportError, ModuleNotFoundError
+        if any(pattern in logs_lower for pattern in [
+            'nameerror:', 'name \'' , 'is not defined',
+            'importerror:', 'modulenotfounderror:', 'no module named',
+            'cannot import', 'import error', 'failed to import',
+            'module not found', 'cannot find module'
+        ]):
+            return ErrorCategory.DEPENDENCY_CONFLICT
+        
+        # General dependency patterns
         if any(pattern in logs_lower for pattern in [
             'dependency', 'version conflict', 'package not found', 
-            'module not found', 'cannot resolve'
+            'cannot resolve'
         ]):
             return ErrorCategory.DEPENDENCY_CONFLICT
         
@@ -95,10 +105,21 @@ class ErrorAnalyzer:
         ]):
             return ErrorCategory.CONFIGURATION_ERROR
         
-        # Environment patterns
+        # Environment patterns - ENHANCED for "Works on my machine" issues
         if any(pattern in logs_lower for pattern in [
             'environment variable', 'env not set', 'path not found',
-            'permission denied', 'access denied'
+            'permission denied', 'access denied',
+            # OS-specific issues
+            'no such file or directory', 'cannot find the path',
+            'filenotfounderror', 'oserror',
+            # Version-specific issues
+            'python version', 'node version', 'unsupported version',
+            'requires python', 'requires node',
+            # System package issues
+            'command not found', 'executable not found',
+            'missing system library', 'shared library',
+            # Path separator issues
+            'invalid path', 'path separator'
         ]):
             return ErrorCategory.ENVIRONMENT_ISSUE
         

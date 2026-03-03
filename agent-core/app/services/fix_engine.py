@@ -62,36 +62,66 @@ class FixEngine:
     
     async def _fix_dependency_conflict(self, analysis: Dict[str, Any], 
                                       context: Dict[str, Any]) -> Dict[str, Any]:
-        """Fix dependency conflicts"""
+        """Fix dependency conflicts including missing imports and packages"""
         
-        # Example fix strategies
         changes = []
         
-        # Strategy 1: Update package versions
-        if 'package.json' in str(analysis.get('affected_files', [])):
-            changes.append({
-                'file': 'package.json',
-                'action': 'update_dependency',
-                'description': 'Update conflicting package versions'
-            })
+        # Check error type
+        error_msg = analysis.get('error_message', '').lower()
         
-        # Strategy 2: Update requirements.txt
-        if 'requirements.txt' in str(analysis.get('affected_files', [])):
+        # Check if it's ModuleNotFoundError (package not installed)
+        is_module_not_found = any(keyword in error_msg for keyword in [
+            'modulenotfounderror', 'no module named'
+        ])
+        
+        # Check if it's NameError or ImportError (missing import statement)
+        is_missing_import = any(keyword in error_msg for keyword in [
+            'nameerror', 'is not defined', 'importerror', 'cannot import'
+        ]) and not is_module_not_found
+        
+        if is_module_not_found:
+            # ModuleNotFoundError: Package needs to be added to requirements.txt
+            logger.info(f"Detected missing package: {error_msg}")
             changes.append({
                 'file': 'requirements.txt',
-                'action': 'pin_version',
-                'description': 'Pin dependency versions to resolve conflict'
+                'action': 'add_missing_package',
+                'description': 'Add missing package to requirements.txt',
+                'error_message': analysis.get('error_message', ''),
+                'root_cause': analysis.get('root_cause', '')
             })
-        
-        # Use AI for specific fix if available
-        if self.client:
-            ai_fix = await self._ai_generate_fix(analysis, context)
-            if ai_fix:
-                changes.extend(ai_fix.get('changes', []))
+            
+        elif is_missing_import:
+            # NameError/ImportError: Import statement needs to be added to Python file
+            logger.info(f"Detected missing import: {error_msg}")
+            for file in analysis.get('affected_files', []):
+                if file and file.endswith('.py'):
+                    changes.append({
+                        'file': file,
+                        'action': 'ai_fix_syntax',
+                        'description': 'Add missing import statement',
+                        'error_message': analysis.get('error_message', ''),
+                        'root_cause': analysis.get('root_cause', ''),
+                        'error_category': 'dependency_conflict'
+                    })
+        else:
+            # Other dependency conflicts (version conflicts, etc.)
+            if 'package.json' in str(analysis.get('affected_files', [])):
+                changes.append({
+                    'file': 'package.json',
+                    'action': 'update_dependency',
+                    'description': 'Update conflicting package versions'
+                })
+            
+            if 'requirements.txt' in str(analysis.get('affected_files', [])):
+                changes.append({
+                    'file': 'requirements.txt',
+                    'action': 'update_dependency',
+                    'description': 'Pin dependency versions to resolve conflict'
+                })
         
         return {
             'fix_type': 'dependency_conflict_resolution',
-            'description': 'Resolved dependency version conflicts',
+            'description': 'Fixed missing package, import, or dependency conflict',
             'changes': changes,
             'auto_applicable': True
         }
@@ -170,13 +200,106 @@ class FixEngine:
     
     async def _fix_environment_issue(self, analysis: Dict[str, Any], 
                                     context: Dict[str, Any]) -> Dict[str, Any]:
-        """Fix environment issues"""
+        """Fix environment issues - Enhanced for 'Works on my machine' problems"""
         
-        changes = [{
-            'file': '.env.example',
-            'action': 'add_env_var',
-            'description': 'Add missing environment variables'
-        }]
+        changes = []
+        error_msg = analysis.get('error_message', '').lower()
+        affected_files = analysis.get('affected_files', [])
+        
+        # 1. Missing environment variables
+        if any(keyword in error_msg for keyword in ['env not set', 'environment variable', 'keyerror']):
+            changes.append({
+                'file': '.env.example',
+                'action': 'add_env_var',
+                'description': 'Add missing environment variables to .env.example'
+            })
+            
+            # Also update GitHub Actions workflow if exists
+            workflow_files = [f for f in affected_files if '.github/workflows' in f]
+            if workflow_files:
+                changes.append({
+                    'file': workflow_files[0],
+                    'action': 'ai_fix_syntax',
+                    'description': 'Add missing environment variables to workflow',
+                    'error_message': analysis.get('error_message', ''),
+                    'root_cause': analysis.get('root_cause', '')
+                })
+        
+        # 2. File not found / Path issues (OS-specific)
+        elif any(keyword in error_msg for keyword in ['filenotfounderror', 'no such file', 'path not found']):
+            for file in affected_files:
+                if file.endswith('.py'):
+                    changes.append({
+                        'file': file,
+                        'action': 'ai_fix_syntax',
+                        'description': 'Fix OS-specific path issues (use os.path.join)',
+                        'error_message': analysis.get('error_message', ''),
+                        'root_cause': 'Path separator issue - use cross-platform paths'
+                    })
+        
+        # 3. Python/Node version issues
+        elif any(keyword in error_msg for keyword in ['python version', 'node version', 'requires python', 'requires node']):
+            # Update GitHub Actions workflow
+            workflow_files = [f for f in affected_files if '.github/workflows' in f]
+            if workflow_files:
+                changes.append({
+                    'file': workflow_files[0],
+                    'action': 'ai_fix_syntax',
+                    'description': 'Update Python/Node version in workflow',
+                    'error_message': analysis.get('error_message', ''),
+                    'root_cause': 'Version mismatch between local and CI environment'
+                })
+            
+            # Update package.json engines or setup.py
+            if 'package.json' in str(affected_files):
+                changes.append({
+                    'file': 'package.json',
+                    'action': 'ai_fix_syntax',
+                    'description': 'Update Node version requirement',
+                    'error_message': analysis.get('error_message', ''),
+                    'root_cause': analysis.get('root_cause', '')
+                })
+        
+        # 4. Permission denied issues
+        elif any(keyword in error_msg for keyword in ['permission denied', 'access denied']):
+            # Add chmod command to workflow or script
+            for file in affected_files:
+                if file.endswith(('.sh', '.bash')):
+                    changes.append({
+                        'file': file,
+                        'action': 'fix_permissions',
+                        'description': 'Add executable permissions (chmod +x)'
+                    })
+        
+        # 5. System library/command not found
+        elif any(keyword in error_msg for keyword in ['command not found', 'shared library', 'missing system library']):
+            # Update Dockerfile or workflow to install system dependencies
+            if 'Dockerfile' in str(affected_files):
+                changes.append({
+                    'file': 'Dockerfile',
+                    'action': 'ai_fix_syntax',
+                    'description': 'Add missing system dependencies (apt-get install)',
+                    'error_message': analysis.get('error_message', ''),
+                    'root_cause': analysis.get('root_cause', '')
+                })
+            
+            workflow_files = [f for f in affected_files if '.github/workflows' in f]
+            if workflow_files:
+                changes.append({
+                    'file': workflow_files[0],
+                    'action': 'ai_fix_syntax',
+                    'description': 'Install missing system packages in CI',
+                    'error_message': analysis.get('error_message', ''),
+                    'root_cause': analysis.get('root_cause', '')
+                })
+        
+        # Default: Generic environment fix
+        if not changes:
+            changes.append({
+                'file': '.env.example',
+                'action': 'add_env_var',
+                'description': 'Add missing environment configuration'
+            })
         
         return {
             'fix_type': 'environment_fix',

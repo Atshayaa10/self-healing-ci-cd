@@ -85,6 +85,13 @@ class GitManager:
                         logger.info(f"Successfully applied AI syntax fix to {file_path}")
                     else:
                         logger.error(f"Failed to apply AI syntax fix to {file_path}")
+                elif change['action'] == 'add_missing_package':
+                    result = await self._add_missing_package(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully added missing package to {file_path}")
+                    else:
+                        logger.error(f"Failed to add missing package to {file_path}")
                 elif change['action'] == 'update_dependency':
                     await self._update_dependency_file(file_path, change)
                     changes_applied = True
@@ -101,6 +108,41 @@ class GitManager:
                 elif change['action'] == 'add_env_var':
                     await self._add_env_var(file_path, change)
                     changes_applied = True
+                elif change['action'] == 'fix_permissions':
+                    result = await self._fix_permissions(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully fixed permissions for {file_path}")
+                    else:
+                        logger.error(f"Failed to fix permissions for {file_path}")
+                elif change['action'] == 'fix_python_version':
+                    result = await self._fix_python_version(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully fixed Python version in {file_path}")
+                    else:
+                        logger.error(f"Failed to fix Python version in {file_path}")
+                elif change['action'] == 'fix_node_version':
+                    result = await self._fix_node_version(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully fixed Node version in {file_path}")
+                    else:
+                        logger.error(f"Failed to fix Node version in {file_path}")
+                elif change['action'] == 'add_env_vars':
+                    result = await self._add_env_vars_to_workflow(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully added env vars to {file_path}")
+                    else:
+                        logger.error(f"Failed to add env vars to {file_path}")
+                elif change['action'] == 'add_system_packages':
+                    result = await self._add_system_packages(file_path, change)
+                    if result:
+                        changes_applied = True
+                        logger.info(f"Successfully added system packages to {file_path}")
+                    else:
+                        logger.error(f"Failed to add system packages to {file_path}")
                 else:
                     logger.warning(f"Unknown action: {change['action']}")
             
@@ -343,6 +385,7 @@ class GitManager:
             # Get error details from change
             error_message = change.get('error_message', 'Syntax error detected')
             root_cause = change.get('root_cause', 'Unknown')
+            error_category = change.get('error_category', 'unknown')
             
             # Use AI to fix the file
             from app.core.config import settings
@@ -374,27 +417,42 @@ class GitManager:
                 return False
             
             # Create prompt for AI
-            prompt = f"""You are a code fixing expert. A CI/CD pipeline failed due to a syntax error in this file.
+            prompt = f"""You are a code fixing expert. A CI/CD pipeline failed and you need to fix this Python file.
 
 File: {file_path.name}
 Error Message: {error_message}
 Root Cause: {root_cause}
+Error Category: {error_category}
 
 Here is the COMPLETE file content:
 
-```
+```python
 {content}
 ```
 
 Your task:
 1. Analyze the ENTIRE file carefully
-2. Identify ALL syntax errors (missing colons, parentheses, indentation issues, etc.)
-3. Generate the COMPLETE CORRECTED file with ALL errors fixed
-4. Return ONLY the corrected code, nothing else
+2. Look for ALL issues:
+   - Missing imports (if code uses 'json', 'os', 'datetime', 'pd', 'np', etc. without importing)
+   - Syntax errors (missing colons, parentheses, indentation issues)
+   - Any other errors
+3. Fix ALL issues found:
+   - ADD missing import statements at the TOP of the file (after any existing imports)
+   - FIX all syntax errors
+   - Remove any comment lines that say "# Missing: import ..." - these are just notes, replace them with actual imports
+4. Return the COMPLETE CORRECTED file with ALL errors fixed
 
-IMPORTANT: Return the COMPLETE corrected file content. Do not explain, do not add comments about what you changed. Just return the fixed code."""
+CRITICAL RULES:
+- If you see comments like "# Missing: import json", REMOVE the comment and ADD the actual import: "import json"
+- If code uses 'json.loads', 'os.getenv', 'datetime.now', etc., you MUST add the imports
+- Common imports: import json, import os, from datetime import datetime, import pandas as pd, import numpy as np
+- Fix ALL syntax errors (missing colons on def/class/if/for/while/try)
+- Return ONLY the corrected Python code, no explanations, no markdown
+- The code must be complete and runnable"""
 
             logger.info(f"Sending file to AI for analysis ({ai_provider})...")
+            logger.debug(f"Original file content:\n{content}")
+            logger.debug(f"Prompt length: {len(prompt)} characters")
             
             # Call AI
             if ai_provider == "groq":
@@ -408,6 +466,7 @@ IMPORTANT: Return the COMPLETE corrected file content. Do not explain, do not ad
                     temperature=0.1
                 )
                 corrected_code = response.choices[0].message.content.strip()
+                logger.debug(f"AI response:\n{corrected_code}")
             elif ai_provider == "openai":
                 response = client.chat.completions.create(
                     model=settings.AI_MODEL,
@@ -430,11 +489,14 @@ IMPORTANT: Return the COMPLETE corrected file content. Do not explain, do not ad
             
             logger.info(f"AI generated corrected code ({len(corrected_code)} characters)")
             
-            # Write the corrected code
-            file_path.write_text(corrected_code, encoding='utf-8')
-            logger.info(f"Successfully replaced file with AI-corrected version")
-            
-            return True
+            # Only write if the code actually changed
+            if corrected_code != content:
+                file_path.write_text(corrected_code, encoding='utf-8')
+                logger.info(f"Successfully replaced file with AI-corrected version")
+                return True
+            else:
+                logger.warning(f"AI generated same code - no changes detected")
+                return False
         
         except Exception as e:
             logger.error(f"Failed to AI-fix syntax in {file_path}: {e}")
@@ -589,3 +651,436 @@ IMPORTANT: Return the COMPLETE corrected file content. Do not explain, do not ad
         # Placeholder: Add env var
         content = file_path.read_text() if file_path.exists() else ""
         file_path.write_text(content)
+    
+    async def _add_missing_package(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Add missing package to requirements.txt using AI"""
+        try:
+            # Extract package name from error message
+            error_message = change.get('error_message', '')
+            logger.info(f"Analyzing error to find missing package: {error_message}")
+            
+            # Use AI to determine the correct package name and version
+            from app.core.config import settings
+            
+            # Initialize AI client
+            client = None
+            ai_provider = settings.AI_PROVIDER.lower()
+            
+            if ai_provider == "groq":
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=settings.GROQ_API_KEY)
+                except ImportError:
+                    logger.error("Groq package not installed")
+                    return False
+            elif ai_provider == "openai":
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                except ImportError:
+                    logger.error("OpenAI package not installed")
+                    return False
+            else:
+                logger.error(f"Unsupported AI provider: {ai_provider}")
+                return False
+            
+            if not client:
+                logger.error("AI client not initialized")
+                return False
+            
+            # Read current requirements.txt if it exists
+            current_requirements = ""
+            if file_path.exists():
+                current_requirements = file_path.read_text(encoding='utf-8')
+                logger.info(f"Current requirements.txt:\n{current_requirements}")
+            else:
+                logger.info("requirements.txt does not exist, will create it")
+            
+            # Create prompt for AI
+            prompt = f"""You are a Python dependency expert. A CI/CD pipeline failed with this error:
+
+Error: {error_message}
+
+Current requirements.txt:
+```
+{current_requirements if current_requirements else "# Empty file"}
+```
+
+Your task:
+1. Identify the missing Python package from the error message
+2. Determine the correct package name to install (e.g., "beautifulsoup4" for "bs4", "pillow" for "PIL")
+3. Find a stable, recent version number
+4. Add it to requirements.txt
+
+IMPORTANT RULES:
+- For "ModuleNotFoundError: No module named 'matplotlib'", add: matplotlib==3.8.0
+- For "ModuleNotFoundError: No module named 'bs4'", add: beautifulsoup4==4.12.0
+- For "ModuleNotFoundError: No module named 'PIL'", add: Pillow==10.0.0
+- For "ModuleNotFoundError: No module named 'cv2'", add: opencv-python==4.8.0
+- Use the INSTALL name, not the import name
+- Use recent stable versions (2023-2024)
+- Add the package at the end of the file
+- Return ONLY the complete updated requirements.txt content
+- Do not add explanations or comments about what you added"""
+
+            logger.info(f"Sending to AI for package analysis...")
+            
+            # Call AI
+            if ai_provider == "groq":
+                response = client.chat.completions.create(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a Python dependency expert. Return only the updated requirements.txt content, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1000,
+                    temperature=0.1
+                )
+                updated_requirements = response.choices[0].message.content.strip()
+            elif ai_provider == "openai":
+                response = client.chat.completions.create(
+                    model=settings.AI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a Python dependency expert. Return only the updated requirements.txt content, no explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1000,
+                    temperature=0.1
+                )
+                updated_requirements = response.choices[0].message.content.strip()
+            else:
+                return False
+            
+            # Clean up the response - remove markdown code blocks if present
+            if '```' in updated_requirements:
+                # Extract content between code blocks
+                parts = updated_requirements.split('```')
+                for part in parts:
+                    if part.strip() and not part.strip().startswith(('txt', 'text', 'python')):
+                        updated_requirements = part.strip()
+                        break
+            
+            logger.info(f"AI generated updated requirements.txt ({len(updated_requirements)} characters)")
+            logger.debug(f"Updated requirements:\n{updated_requirements}")
+            
+            # Only write if content actually changed
+            if updated_requirements != current_requirements:
+                # Ensure parent directory exists
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Write the updated requirements
+                file_path.write_text(updated_requirements, encoding='utf-8')
+                logger.info(f"Successfully updated requirements.txt with missing package")
+                return True
+            else:
+                logger.warning(f"AI generated same requirements.txt - no changes detected")
+                return False
+        
+        except Exception as e:
+            logger.error(f"Failed to add missing package to {file_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    async def _fix_permissions(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Fix file permissions (add executable permissions)"""
+        try:
+            import stat
+            import os
+            
+            logger.info(f"Fixing permissions for {file_path}")
+            
+            # Add executable permissions (chmod +x equivalent)
+            current_permissions = os.stat(file_path).st_mode
+            new_permissions = current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            
+            os.chmod(file_path, new_permissions)
+            logger.info(f"Successfully added executable permissions to {file_path}")
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to fix permissions for {file_path}: {e}")
+            return False
+
+    async def _fix_python_version(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Fix Python version mismatch in GitHub Actions workflow"""
+        try:
+            logger.info(f"Fixing Python version in {file_path}")
+            
+            # Read workflow file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Use AI to fix Python version
+            prompt = f"""Fix the Python version in this GitHub Actions workflow file.
+
+Error: {change.get('error_message', 'Python version mismatch')}
+Root Cause: {change.get('root_cause', 'Python version in CI differs from requirements')}
+
+Current workflow file:
+```yaml
+{content}
+```
+
+Instructions:
+1. Identify the Python version being used (look for python-version or setup-python)
+2. Update it to a compatible version (prefer 3.11 or 3.12 for modern projects)
+3. If there's a version constraint in requirements, match it
+4. Return the COMPLETE corrected workflow file
+
+Return ONLY the corrected YAML, no explanations."""
+
+            if not self.client:
+                logger.error("No AI client available")
+                return False
+            
+            response = self.client.chat.completions.create(
+                model=self.ai_model,
+                messages=[
+                    {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            corrected_content = response.choices[0].message.content.strip()
+            
+            # Clean up markdown code blocks
+            if '```yaml' in corrected_content:
+                corrected_content = corrected_content.split('```yaml')[1].split('```')[0].strip()
+            elif '```' in corrected_content:
+                corrected_content = corrected_content.split('```')[1].split('```')[0].strip()
+            
+            # Check if content changed
+            if corrected_content == content:
+                logger.warning("AI generated same content - no changes needed")
+                return False
+            
+            # Write corrected content
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(corrected_content)
+            
+            logger.info(f"Successfully fixed Python version in {file_path}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to fix Python version: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    async def _fix_node_version(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Fix Node.js version mismatch in GitHub Actions workflow"""
+        try:
+            logger.info(f"Fixing Node version in {file_path}")
+            
+            # Read workflow file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Use AI to fix Node version
+            prompt = f"""Fix the Node.js version in this GitHub Actions workflow file.
+
+Error: {change.get('error_message', 'Node version mismatch')}
+Root Cause: {change.get('root_cause', 'Node version in CI differs from requirements')}
+
+Current workflow file:
+```yaml
+{content}
+```
+
+Instructions:
+1. Identify the Node version being used (look for node-version or setup-node)
+2. Update it to a compatible version (prefer 18.x or 20.x for modern projects)
+3. If there's a version in package.json engines, match it
+4. Return the COMPLETE corrected workflow file
+
+Return ONLY the corrected YAML, no explanations."""
+
+            if not self.client:
+                logger.error("No AI client available")
+                return False
+            
+            response = self.client.chat.completions.create(
+                model=self.ai_model,
+                messages=[
+                    {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            corrected_content = response.choices[0].message.content.strip()
+            
+            # Clean up markdown code blocks
+            if '```yaml' in corrected_content:
+                corrected_content = corrected_content.split('```yaml')[1].split('```')[0].strip()
+            elif '```' in corrected_content:
+                corrected_content = corrected_content.split('```')[1].split('```')[0].strip()
+            
+            # Check if content changed
+            if corrected_content == content:
+                logger.warning("AI generated same content - no changes needed")
+                return False
+            
+            # Write corrected content
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(corrected_content)
+            
+            logger.info(f"Successfully fixed Node version in {file_path}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to fix Node version: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    async def _add_env_vars_to_workflow(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Add missing environment variables to GitHub Actions workflow"""
+        try:
+            logger.info(f"Adding environment variables to {file_path}")
+            
+            # Read workflow file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Use AI to add env vars
+            prompt = f"""Add missing environment variables to this GitHub Actions workflow file.
+
+Error: {change.get('error_message', 'Missing environment variable')}
+Root Cause: {change.get('root_cause', 'Environment variables not set in CI')}
+
+Current workflow file:
+```yaml
+{content}
+```
+
+Instructions:
+1. Identify which environment variable is missing from the error message
+2. Add it to the workflow under 'env:' section
+3. Use GitHub Secrets syntax: ${{{{ secrets.VARIABLE_NAME }}}}
+4. If no env section exists, create one
+5. Return the COMPLETE corrected workflow file
+
+Return ONLY the corrected YAML, no explanations."""
+
+            if not self.client:
+                logger.error("No AI client available")
+                return False
+            
+            response = self.client.chat.completions.create(
+                model=self.ai_model,
+                messages=[
+                    {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            corrected_content = response.choices[0].message.content.strip()
+            
+            # Clean up markdown code blocks
+            if '```yaml' in corrected_content:
+                corrected_content = corrected_content.split('```yaml')[1].split('```')[0].strip()
+            elif '```' in corrected_content:
+                corrected_content = corrected_content.split('```')[1].split('```')[0].strip()
+            
+            # Check if content changed
+            if corrected_content == content:
+                logger.warning("AI generated same content - no changes needed")
+                return False
+            
+            # Write corrected content
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(corrected_content)
+            
+            logger.info(f"Successfully added env vars to {file_path}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to add env vars: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    async def _add_system_packages(self, file_path: Path, change: Dict[str, Any]) -> bool:
+        """Add missing system packages to GitHub Actions workflow"""
+        try:
+            logger.info(f"Adding system packages to {file_path}")
+            
+            # Read workflow file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Use AI to add system packages
+            prompt = f"""Add missing system packages to this GitHub Actions workflow file.
+
+Error: {change.get('error_message', 'Command not found')}
+Root Cause: {change.get('root_cause', 'System dependencies not installed in CI')}
+
+Current workflow file:
+```yaml
+{content}
+```
+
+Instructions:
+1. Identify which command/library is missing from the error message
+2. Add a step to install it using apt-get (for Ubuntu runners)
+3. Common packages: build-essential, libpq-dev, python3-dev, etc.
+4. Add the step BEFORE the step that uses the command
+5. Return the COMPLETE corrected workflow file
+
+Example step to add:
+```yaml
+- name: Install system dependencies
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y <package-name>
+```
+
+Return ONLY the corrected YAML, no explanations."""
+
+            if not self.client:
+                logger.error("No AI client available")
+                return False
+            
+            response = self.client.chat.completions.create(
+                model=self.ai_model,
+                messages=[
+                    {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            corrected_content = response.choices[0].message.content.strip()
+            
+            # Clean up markdown code blocks
+            if '```yaml' in corrected_content:
+                corrected_content = corrected_content.split('```yaml')[1].split('```')[0].strip()
+            elif '```' in corrected_content:
+                corrected_content = corrected_content.split('```')[1].split('```')[0].strip()
+            
+            # Check if content changed
+            if corrected_content == content:
+                logger.warning("AI generated same content - no changes needed")
+                return False
+            
+            # Write corrected content
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(corrected_content)
+            
+            logger.info(f"Successfully added system packages to {file_path}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to add system packages: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
