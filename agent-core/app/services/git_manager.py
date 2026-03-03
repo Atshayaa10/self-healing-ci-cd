@@ -812,6 +812,34 @@ IMPORTANT RULES:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            # Initialize AI client
+            from app.core.config import settings
+            
+            client = None
+            ai_provider = settings.AI_PROVIDER.lower()
+            
+            if ai_provider == "groq":
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=settings.GROQ_API_KEY)
+                except ImportError:
+                    logger.error("Groq package not installed")
+                    return False
+            elif ai_provider == "openai":
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                except ImportError:
+                    logger.error("OpenAI package not installed")
+                    return False
+            else:
+                logger.error(f"Unsupported AI provider: {ai_provider}")
+                return False
+            
+            if not client:
+                logger.error("AI client not initialized")
+                return False
+            
             # Use AI to fix Python version
             prompt = f"""Fix the Python version in this GitHub Actions workflow file.
 
@@ -830,13 +858,9 @@ Instructions:
 4. Return the COMPLETE corrected workflow file
 
 Return ONLY the corrected YAML, no explanations."""
-
-            if not self.client:
-                logger.error("No AI client available")
-                return False
             
-            response = self.client.chat.completions.create(
-                model=self.ai_model,
+            response = client.chat.completions.create(
+                model=settings.AI_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
                     {"role": "user", "content": prompt}
@@ -880,6 +904,34 @@ Return ONLY the corrected YAML, no explanations."""
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            # Initialize AI client
+            from app.core.config import settings
+            
+            client = None
+            ai_provider = settings.AI_PROVIDER.lower()
+            
+            if ai_provider == "groq":
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=settings.GROQ_API_KEY)
+                except ImportError:
+                    logger.error("Groq package not installed")
+                    return False
+            elif ai_provider == "openai":
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                except ImportError:
+                    logger.error("OpenAI package not installed")
+                    return False
+            else:
+                logger.error(f"Unsupported AI provider: {ai_provider}")
+                return False
+            
+            if not client:
+                logger.error("AI client not initialized")
+                return False
+            
             # Use AI to fix Node version
             prompt = f"""Fix the Node.js version in this GitHub Actions workflow file.
 
@@ -898,13 +950,9 @@ Instructions:
 4. Return the COMPLETE corrected workflow file
 
 Return ONLY the corrected YAML, no explanations."""
-
-            if not self.client:
-                logger.error("No AI client available")
-                return False
             
-            response = self.client.chat.completions.create(
-                model=self.ai_model,
+            response = client.chat.completions.create(
+                model=settings.AI_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
                     {"role": "user", "content": prompt}
@@ -948,6 +996,34 @@ Return ONLY the corrected YAML, no explanations."""
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            # Initialize AI client
+            from app.core.config import settings
+            
+            client = None
+            ai_provider = settings.AI_PROVIDER.lower()
+            
+            if ai_provider == "groq":
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=settings.GROQ_API_KEY)
+                except ImportError:
+                    logger.error("Groq package not installed")
+                    return False
+            elif ai_provider == "openai":
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                except ImportError:
+                    logger.error("OpenAI package not installed")
+                    return False
+            else:
+                logger.error(f"Unsupported AI provider: {ai_provider}")
+                return False
+            
+            if not client:
+                logger.error("AI client not initialized")
+                return False
+            
             # Use AI to add env vars
             prompt = f"""Add missing environment variables to this GitHub Actions workflow file.
 
@@ -967,13 +1043,9 @@ Instructions:
 5. Return the COMPLETE corrected workflow file
 
 Return ONLY the corrected YAML, no explanations."""
-
-            if not self.client:
-                logger.error("No AI client available")
-                return False
             
-            response = self.client.chat.completions.create(
-                model=self.ai_model,
+            response = client.chat.completions.create(
+                model=settings.AI_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
                     {"role": "user", "content": prompt}
@@ -1017,6 +1089,34 @@ Return ONLY the corrected YAML, no explanations."""
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            # Initialize AI client
+            from app.core.config import settings
+            
+            client = None
+            ai_provider = settings.AI_PROVIDER.lower()
+            
+            if ai_provider == "groq":
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=settings.GROQ_API_KEY)
+                except ImportError:
+                    logger.error("Groq package not installed")
+                    return False
+            elif ai_provider == "openai":
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                except ImportError:
+                    logger.error("OpenAI package not installed")
+                    return False
+            else:
+                logger.error(f"Unsupported AI provider: {ai_provider}")
+                return False
+            
+            if not client:
+                logger.error("AI client not initialized")
+                return False
+            
             # Use AI to add system packages
             prompt = f"""Add missing system packages to this GitHub Actions workflow file.
 
@@ -1044,13 +1144,9 @@ Example step to add:
 ```
 
 Return ONLY the corrected YAML, no explanations."""
-
-            if not self.client:
-                logger.error("No AI client available")
-                return False
             
-            response = self.client.chat.completions.create(
-                model=self.ai_model,
+            response = client.chat.completions.create(
+                model=settings.AI_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a DevOps expert. Return only corrected YAML."},
                     {"role": "user", "content": prompt}
@@ -1084,3 +1180,118 @@ Return ONLY the corrected YAML, no explanations."""
             import traceback
             logger.error(traceback.format_exc())
             return False
+
+    async def create_pull_request(self, repo_path: str, owner: str, repo_name: str, 
+                                  branch_name: str, title: str, description: str) -> Dict[str, Any]:
+        """Create a pull request for high-risk changes"""
+        try:
+            from app.core.config import settings
+            from github import Github
+            
+            logger.info(f"Creating pull request: {title}")
+            
+            # Initialize GitHub client
+            g = Github(settings.GITHUB_TOKEN)
+            repo = g.get_repo(f"{owner}/{repo_name}")
+            
+            # Get the default branch
+            default_branch = repo.default_branch
+            
+            # Create pull request
+            pr = repo.create_pull(
+                title=title,
+                body=description,
+                head=branch_name,
+                base=default_branch
+            )
+            
+            logger.info(f"Pull request created: {pr.html_url}")
+            
+            return {
+                'success': True,
+                'pr_number': pr.number,
+                'pr_url': pr.html_url,
+                'branch': branch_name
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to create pull request: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    async def commit_and_push_to_branch(self, repo_path: str, branch_name: str, 
+                                       commit_message: str, owner: str, repo_name: str) -> Dict[str, Any]:
+        """Commit changes and push to a new branch for PR"""
+        try:
+            from app.core.config import settings
+            
+            repo = git.Repo(repo_path)
+            
+            # Create and checkout new branch
+            logger.info(f"Creating new branch: {branch_name}")
+            
+            # Check if branch already exists
+            if branch_name in [ref.name for ref in repo.references]:
+                # Delete existing branch
+                repo.delete_head(branch_name, force=True)
+            
+            new_branch = repo.create_head(branch_name)
+            new_branch.checkout()
+            
+            # Stage all changes
+            repo.git.add(A=True)
+            
+            # Check if there are changes to commit
+            if not repo.is_dirty() and not repo.untracked_files:
+                logger.warning("No changes to commit")
+                return {'success': False, 'error': 'No changes to commit'}
+            
+            # Commit changes
+            repo.index.commit(commit_message)
+            logger.info(f"Committed changes: {commit_message}")
+            
+            # Get the remote URL and add authentication
+            origin = repo.remote('origin')
+            original_url = list(origin.urls)[0]
+            
+            logger.info(f"Original remote URL: {original_url[:50]}...")
+            
+            # Add token to URL for authentication
+            if 'github.com' in original_url:
+                if original_url.startswith('https://'):
+                    # Remove any existing token
+                    clean_url = original_url.replace(f'https://{settings.GITHUB_TOKEN}@', 'https://')
+                    clean_url = clean_url.replace('https://', f'https://{settings.GITHUB_TOKEN}@')
+                    auth_url = clean_url
+                else:
+                    auth_url = original_url
+                
+                logger.info(f"Clean URL: {auth_url.replace(settings.GITHUB_TOKEN, '***')}")
+                
+                # Set the authenticated URL
+                origin.set_url(auth_url)
+            
+            # Push to remote
+            logger.info(f"Pushing branch {branch_name} to remote...")
+            origin.push(refspec=f'{branch_name}:{branch_name}', force=True)
+            
+            logger.info(f"Successfully pushed branch: {branch_name}")
+            
+            return {
+                'success': True,
+                'branch': branch_name,
+                'commit_message': commit_message
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to commit and push to branch: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                'success': False,
+                'error': str(e)
+            }

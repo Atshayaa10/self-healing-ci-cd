@@ -183,7 +183,7 @@ class AgentOrchestrator:
     
     async def _commit_fix(self, monitor, pipeline: Pipeline, 
                          fix: Fix, fix_result: Dict[str, Any]) -> bool:
-        """Commit and push fix to repository"""
+        """Commit and push fix to repository (with risk assessment for PR creation)"""
         logger.info(f"Committing fix {fix.id} to {pipeline.repository}")
         
         try:
@@ -208,37 +208,144 @@ class AgentOrchestrator:
                 await self.git_manager.cleanup_repository(repo_url)
                 return False
             
-            # Commit and push
-            commit_message = f"[CI Healer] {fix_result['description']}\n\nAuto-fix for pipeline failure #{pipeline.pipeline_id}"
-            commit_sha = await self.git_manager.commit_and_push(temp_dir, commit_message)
+            # Get the analysis for risk assessment
+            db = SessionLocal()
+            try:
+                analysis = db.query(FailureAnalysis).filter(
+                    FailureAnalysis.id == fix.analysis_id
+                ).first()
+                
+                if not analysis:
+                    logger.warning("Could not find analysis for risk assessment, defaulting to low risk")
+                    risk_level = 'low'
+                else:
+                    # Assess risk level
+                    analysis_dict = {
+                        'error_category': analysis.error_category,
+                        'confidence_score': analysis.confidence_score
+                    }
+                    risk_level = self.fix_engine.assess_risk_level(analysis_dict, fix_result)
+                    logger.info(f"Risk assessment: {risk_level.upper()} RISK")
+            finally:
+                db.close()
             
-            if commit_sha:
-                fix.commit_sha = commit_sha
-                fix.status = FixStatus.APPLIED
-                logger.info(f"Successfully committed fix: {commit_sha}")
+            # Route based on risk level
+            if risk_level == 'low':
+                # Low risk: Auto-commit directly to main branch
+                logger.info("LOW RISK: Auto-committing directly to main branch")
                 
-                # Trigger pipeline re-run
-                await monitor.trigger_pipeline(pipeline.repository, pipeline.branch)
-                logger.info(f"Re-triggered pipeline for {pipeline.repository}")
+                commit_message = f"[CI Healer] {fix_result['description']}\n\nAuto-fix for pipeline failure #{pipeline.pipeline_id}"
+                commit_sha = await self.git_manager.commit_and_push(temp_dir, commit_message)
                 
-                # Cleanup
-                await self.git_manager.cleanup_repository(repo_url)
-                return True
+                if commit_sha:
+                    fix.commit_sha = commit_sha
+                    fix.status = FixStatus.APPLIED
+                    logger.info(f"Successfully committed fix: {commit_sha}")
+                    
+                    # Trigger pipeline re-run
+                    await monitor.trigger_pipeline(pipeline.repository, pipeline.branch)
+                    logger.info(f"Re-triggered pipeline for {pipeline.repository}")
+                    
+                    # Cleanup
+                    await self.git_manager.cleanup_repository(repo_url)
+                    return True
+                else:
+                    logger.error("Failed to commit changes")
+                    await self.git_manager.cleanup_repository(repo_url)
+                    return False
+            
             else:
-                logger.error("Failed to commit changes")
-                await self.git_manager.cleanup_repository(repo_url)
-                return False
+                # Medium/High risk: Create pull request
+                logger.info(f"{risk_level.upper()} RISK: Creating pull request for review")
+                
+                # Extract owner and repo name from repository string
+                repo_parts = pipeline.repository.split('/')
+                if len(repo_parts) != 2:
+                    logger.error(f"Invalid repository format: {pipeline.repository}")
+                    await self.git_manager.cleanup_repository(repo_url)
+                    return False
+                
+                owner, repo_name = repo_parts
+                
+                # Create branch name
+                branch_name = f"ci-healer/fix-{pipeline.pipeline_id}"
+                
+                # Commit message
+                commit_message = f"[CI Healer] {fix_result['description']}\n\nAuto-fix for pipeline failure #{pipeline.pipeline_id}"
+                
+                # Commit and push to new branch
+                push_result = await self.git_manager.commit_and_push_to_branch(
+                    temp_dir, branch_name, commit_message, owner, repo_name
+                )
+                
+                if not push_result.get('success'):
+                    logger.error(f"Failed to push to branch: {push_result.get('error')}")
+                    await self.git_manager.cleanup_repository(repo_url)
+                    return False
+                
+                # Create PR description
+                pr_title = f"[CI Healer] Fix: {fix_result['description']}"
+                pr_description = f"""## Automated Fix for Pipeline Failure
+
+**Pipeline ID:** #{pipeline.pipeline_id}
+**Risk Level:** {risk_level.upper()}
+**Branch:** {pipeline.branch}
+**Commit:** {pipeline.commit_sha[:8]}
+
+### Error Analysis
+- **Category:** {analysis.error_category if analysis else 'Unknown'}
+- **Confidence:** {analysis.confidence_score if analysis else 0}%
+
+### Changes Made
+{self._format_changes_for_pr(changes)}
+
+### Description
+{fix_result['description']}
+
+---
+*This PR was automatically generated by CI Healer. Please review the changes before merging.*
+"""
+                
+                # Create pull request
+                pr_result = await self.git_manager.create_pull_request(
+                    temp_dir, owner, repo_name, branch_name, pr_title, pr_description
+                )
+                
+                if pr_result.get('success'):
+                    fix.commit_sha = branch_name  # Store branch name for reference
+                    fix.status = FixStatus.APPLIED
+                    logger.info(f"Successfully created PR: {pr_result.get('pr_url')}")
+                    logger.info(f"PR #{pr_result.get('pr_number')} - {pr_result.get('pr_url')}")
+                    
+                    # Cleanup
+                    await self.git_manager.cleanup_repository(repo_url)
+                    return True
+                else:
+                    logger.error(f"Failed to create PR: {pr_result.get('error')}")
+                    await self.git_manager.cleanup_repository(repo_url)
+                    return False
                 
         except Exception as e:
             logger.error(f"Error committing fix: {e}")
-            return False
-            logger.info(f"Re-triggered pipeline for {pipeline.repository}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to trigger pipeline: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     def stop_monitoring(self):
         """Stop the monitoring loop"""
         self.running = False
         logger.info("Stopping monitoring...")
+
+    def _format_changes_for_pr(self, changes: list) -> str:
+        """Format changes list for PR description"""
+        if not changes:
+            return "No changes"
+        
+        formatted = []
+        for i, change in enumerate(changes, 1):
+            file = change.get('file', 'unknown')
+            action = change.get('action', 'unknown')
+            desc = change.get('description', 'No description')
+            formatted.append(f"{i}. **{file}** - {action}\n   - {desc}")
+        
+        return "\n".join(formatted)
