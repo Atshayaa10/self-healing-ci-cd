@@ -11,9 +11,9 @@ import hashlib
 from pathlib import Path
 
 try:
-    from langchain.vectorstores import Chroma
-    from langchain.embeddings import HuggingFaceEmbeddings
-    from langchain.docstore.document import Document
+    from langchain_community.vectorstores import Chroma
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_core.documents import Document
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     logger.warning("LangChain not available. RAG features will be limited.")
