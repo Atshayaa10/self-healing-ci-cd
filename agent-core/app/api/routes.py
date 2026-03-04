@@ -50,3 +50,36 @@ async def get_stats(db: Session = Depends(get_db)):
         "successful_fixes": successful_fixes,
         "success_rate": round(success_rate, 2)
     }
+
+
+@router.get("/rag/statistics")
+async def get_rag_statistics(db: Session = Depends(get_db)):
+    """Get RAG knowledge base statistics"""
+    from app.services.rag_service import get_rag_service
+    
+    rag_service = get_rag_service()
+    stats = rag_service.get_fix_statistics()
+    
+    return {
+        "status": "success",
+        "data": stats
+    }
+
+@router.post("/rag/clear")
+async def clear_rag_knowledge_base(db: Session = Depends(get_db)):
+    """Clear RAG knowledge base (use with caution)"""
+    from app.services.rag_service import get_rag_service
+    
+    rag_service = get_rag_service()
+    success = rag_service.clear_knowledge_base()
+    
+    if success:
+        return {
+            "status": "success",
+            "message": "RAG knowledge base cleared"
+        }
+    else:
+        return {
+            "status": "error",
+            "message": "Failed to clear RAG knowledge base"
+        }

@@ -242,6 +242,9 @@ class AgentOrchestrator:
                     fix.status = FixStatus.APPLIED
                     logger.info(f"Successfully committed fix: {commit_sha}")
                     
+                    # Store successful fix in RAG for future learning
+                    self._store_fix_in_rag(analysis, fix_result, pipeline.repository, success=True)
+                    
                     # Trigger pipeline re-run
                     await monitor.trigger_pipeline(pipeline.repository, pipeline.branch)
                     logger.info(f"Re-triggered pipeline for {pipeline.repository}")
@@ -349,3 +352,33 @@ class AgentOrchestrator:
             formatted.append(f"{i}. **{file}** - {action}\n   - {desc}")
         
         return "\n".join(formatted)
+
+    def _store_fix_in_rag(
+        self,
+        analysis: FailureAnalysis,
+        fix_result: Dict[str, Any],
+        repository: str,
+        success: bool
+    ):
+        """Store successful fix in RAG knowledge base for future learning"""
+        try:
+            analysis_dict = {
+                'error_category': analysis.error_category,
+                'error_message': analysis.error_message,
+                'root_cause': analysis.root_cause,
+                'affected_files': eval(analysis.affected_files) if analysis.affected_files else [],
+                'confidence_score': analysis.confidence_score
+            }
+            
+            stored = self.fix_engine.store_successful_fix(
+                analysis=analysis_dict,
+                fix_result=fix_result,
+                repository=repository,
+                success=success
+            )
+            
+            if stored:
+                logger.info("RAG: Successfully stored fix for future learning")
+            
+        except Exception as e:
+            logger.error(f"RAG: Failed to store fix: {e}")

@@ -22,3 +22,10 @@ ollama==0.1.6
 groq==0.4.1
 
 google-generativeai==0.3.2
+
+# RAG and Vector Store
+langchain==0.1.0
+langchain-community==0.0.13
+chromadb==0.4.22
+sentence-transformers==2.3.1
+tiktoken==0.5.2

@@ -2,14 +2,16 @@ from typing import Dict, Any, List
 from loguru import logger
 from app.models.pipeline import ErrorCategory
 from app.core.config import settings
+from app.services.rag_service import get_rag_service
 import json
 
 class FixEngine:
-    """Automated fix generation engine"""
+    """Automated fix generation engine with RAG support"""
     
     def __init__(self):
         self.client = None
         self.ai_provider = settings.AI_PROVIDER.lower()
+        self.rag_service = get_rag_service()
         
         if self.ai_provider == "openai" and settings.OPENAI_API_KEY:
             from openai import OpenAI
@@ -42,11 +44,17 @@ class FixEngine:
     
     async def generate_fix(self, analysis: Dict[str, Any], 
                           repository_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate automated fix based on error analysis"""
+        """Generate automated fix based on error analysis with RAG support"""
         
         category = analysis['error_category']
         
-        # Route to appropriate fix strategy
+        # Try to retrieve similar fixes from RAG first
+        similar_fixes = self._retrieve_similar_fixes(analysis, repository_context)
+        
+        if similar_fixes:
+            logger.info(f"RAG: Found {len(similar_fixes)} similar fixes to learn from")
+        
+        # Route to appropriate fix strategy (now with RAG context)
         if category == ErrorCategory.DEPENDENCY_CONFLICT:
             return await self._fix_dependency_conflict(analysis, repository_context)
         elif category == ErrorCategory.TEST_FAILURE:
@@ -567,3 +575,156 @@ Keep it practical and executable."""
         except Exception as e:
             logger.error(f"AI fix generation failed: {e}")
             return {}
+
+    def assess_risk_level(self, analysis: Dict[str, Any], fix: Dict[str, Any]) -> str:
+        """
+        Assess risk level of a fix
+        Returns: 'low', 'medium', or 'high'
+        """
+        category = analysis.get('error_category')
+        confidence = analysis.get('confidence_score', 0)
+        changes = fix.get('changes', [])
+        
+        # High risk conditions
+        high_risk_conditions = [
+            # Multiple files being changed
+            len(changes) > 3,
+            
+            # Test failures (logic changes)
+            category == ErrorCategory.TEST_FAILURE,
+            
+            # Low confidence in analysis
+            confidence < 60,
+            
+            # Configuration changes in critical files
+            any('docker' in c.get('file', '').lower() for c in changes),
+            any('kubernetes' in c.get('file', '').lower() for c in changes),
+            any('terraform' in c.get('file', '').lower() for c in changes),
+            
+            # Database migrations
+            any('migration' in c.get('file', '').lower() for c in changes),
+            any('schema' in c.get('file', '').lower() for c in changes),
+            
+            # Security-related files
+            any('auth' in c.get('file', '').lower() for c in changes),
+            any('security' in c.get('file', '').lower() for c in changes),
+            any('.env' in c.get('file', '') for c in changes),
+        ]
+        
+        if any(high_risk_conditions):
+            logger.info(f"Assessed as HIGH RISK: {category}, confidence: {confidence}, changes: {len(changes)}")
+            return 'high'
+        
+        # Medium risk conditions
+        medium_risk_conditions = [
+            # Multiple files
+            len(changes) > 1,
+            
+            # Configuration errors
+            category == ErrorCategory.CONFIGURATION_ERROR,
+            
+            # Environment issues
+            category == ErrorCategory.ENVIRONMENT_ISSUE,
+            
+            # Moderate confidence
+            60 <= confidence < 80,
+        ]
+        
+        if any(medium_risk_conditions):
+            logger.info(f"Assessed as MEDIUM RISK: {category}, confidence: {confidence}, changes: {len(changes)}")
+            return 'medium'
+        
+        # Low risk (safe to auto-fix)
+        low_risk_conditions = [
+            # Syntax errors
+            category == ErrorCategory.SYNTAX_ERROR,
+            
+            # Missing imports
+            category == ErrorCategory.DEPENDENCY_CONFLICT and 'import' in str(changes).lower(),
+            
+            # Single file change
+            len(changes) == 1,
+            
+            # High confidence
+            confidence >= 80,
+        ]
+        
+        logger.info(f"Assessed as LOW RISK: {category}, confidence: {confidence}, changes: {len(changes)}")
+        return 'low'
+
+    def _retrieve_similar_fixes(
+        self,
+        analysis: Dict[str, Any],
+        repository_context: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Retrieve similar fixes from RAG knowledge base"""
+        try:
+            similar_fixes = self.rag_service.retrieve_similar_fixes(
+                error_category=analysis.get('error_category', ''),
+                error_message=analysis.get('error_message', ''),
+                root_cause=analysis.get('root_cause', ''),
+                affected_files=analysis.get('affected_files', []),
+                top_k=3,
+                similarity_threshold=0.7
+            )
+            return similar_fixes
+        except Exception as e:
+            logger.error(f"Failed to retrieve similar fixes from RAG: {e}")
+            return []
+    
+    def store_successful_fix(
+        self,
+        analysis: Dict[str, Any],
+        fix_result: Dict[str, Any],
+        repository: str,
+        success: bool = True
+    ) -> bool:
+        """Store a successful fix in RAG knowledge base"""
+        try:
+            return self.rag_service.store_successful_fix(
+                error_category=analysis.get('error_category', ''),
+                error_message=analysis.get('error_message', ''),
+                root_cause=analysis.get('root_cause', ''),
+                affected_files=analysis.get('affected_files', []),
+                fix_description=fix_result.get('description', ''),
+                fix_changes=fix_result.get('changes', []),
+                confidence_score=analysis.get('confidence_score', 0),
+                repository=repository,
+                success=success
+            )
+        except Exception as e:
+            logger.error(f"Failed to store fix in RAG: {e}")
+            return False
+    
+    def _format_similar_fixes_for_prompt(self, similar_fixes: List[Dict[str, Any]]) -> str:
+        """Format similar fixes as examples for AI prompt"""
+        if not similar_fixes:
+            return ""
+        
+        examples = []
+        for i, fix in enumerate(similar_fixes, 1):
+            similarity = fix.get('similarity', 0) * 100
+            description = fix.get('fix_description', 'No description')
+            changes = fix.get('fix_changes', [])
+            
+            change_summary = []
+            for change in changes[:3]:  # Limit to 3 changes
+                action = change.get('action', 'unknown')
+                file = change.get('file', 'unknown')
+                desc = change.get('description', '')
+                change_summary.append(f"  - {action} in {file}: {desc}")
+            
+            example = f"""
+Example {i} (Similarity: {similarity:.1f}%):
+Fix: {description}
+Changes:
+{chr(10).join(change_summary)}
+"""
+            examples.append(example)
+        
+        return f"""
+SIMILAR PAST FIXES (Learn from these successful solutions):
+{''.join(examples)}
+
+Use these examples as guidance, but adapt to the current specific error.
+"""
